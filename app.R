@@ -307,8 +307,9 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
+  channel <- NULL
+
   rv <- reactiveValues(
-    channel = NULL,
     connection_status = "Not connected.",
     preview_status = "No preview has been run.",
     preview_count = NULL,
@@ -321,9 +322,9 @@ server <- function(input, output, session) {
   )
 
   close_channel <- function() {
-    if (!is.null(rv$channel)) {
-      try(sqlClose(rv$channel), silent = TRUE)
-      rv$channel <- NULL
+    if (!is.null(channel)) {
+      try(sqlClose(channel), silent = TRUE)
+      channel <<- NULL
     }
   }
 
@@ -346,7 +347,7 @@ server <- function(input, output, session) {
     }
 
     connection_warnings <- character(0)
-    channel <- tryCatch(
+    db_channel <- tryCatch(
       withCallingHandlers(
         odbcConnectAccess2007(input$db_path),
         warning = function(warn) {
@@ -357,13 +358,12 @@ server <- function(input, output, session) {
       error = function(err) err
     )
 
-    if (inherits(channel, "error")) {
-      rv$connection_status <- paste("Connection failed:", conditionMessage(channel))
+    if (inherits(db_channel, "error")) {
+      rv$connection_status <- paste("Connection failed:", conditionMessage(db_channel))
       return()
     }
 
-    if (!is_open_rodbc_channel(channel)) {
-      rv$channel <- NULL
+    if (!is_open_rodbc_channel(db_channel)) {
       status_message <- "Connection failed: RODBC did not return an open channel."
 
       if (length(connection_warnings) > 0) {
@@ -374,9 +374,9 @@ server <- function(input, output, session) {
       return()
     }
 
-    rv$channel <- channel
+    channel <<- db_channel
 
-    validation_result <- run_sql(rv$channel, "SELECT Count(*) AS [StationCount] FROM [tblStation]")
+    validation_result <- run_sql(channel, "SELECT Count(*) AS [StationCount] FROM [tblStation]")
     if (!validation_result$ok) {
       close_channel()
       rv$connection_status <- paste("Connection failed validation:", validation_result$message)
@@ -471,7 +471,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$preview, {
-    if (is.null(rv$channel)) {
+    if (is.null(channel)) {
       rv$preview_status <- "Connect to the database before previewing."
       return()
     }
@@ -490,14 +490,14 @@ server <- function(input, output, session) {
     rv$preview_sql <- list(count = count_sql, preview = preview_sql)
     rv$update_sql <- update_sql
 
-    count_result <- run_sql(rv$channel, count_sql)
+    count_result <- run_sql(channel, count_sql)
     if (!count_result$ok) {
       rv$preview_status <- paste("Count preview failed:", count_result$message)
       rv$preview_ready <- FALSE
       return()
     }
 
-    preview_result <- run_sql(rv$channel, preview_sql)
+    preview_result <- run_sql(channel, preview_sql)
     if (!preview_result$ok) {
       rv$preview_status <- paste("Row preview failed:", preview_result$message)
       rv$preview_ready <- FALSE
@@ -539,7 +539,7 @@ server <- function(input, output, session) {
   observeEvent(input$execute_update, {
     removeModal()
 
-    if (is.null(rv$channel)) {
+    if (is.null(channel)) {
       rv$preview_status <- "Connection is no longer available. Reconnect and preview again."
       rv$preview_ready <- FALSE
       return()
@@ -552,7 +552,7 @@ server <- function(input, output, session) {
       return()
     }
 
-    update_result <- run_sql(rv$channel, rv$update_sql)
+    update_result <- run_sql(channel, rv$update_sql)
     if (!update_result$ok) {
       rv$preview_status <- paste("Update failed:", update_result$message)
       return()
