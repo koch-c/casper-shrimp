@@ -307,6 +307,7 @@ config_signature <- function(config) {
 
 ui <- fluidPage(
   titlePanel("tblIndividualMeasure Bulk Update"),
+  tags$head(tags$style(HTML("\n    .preview-status-box {\n      padding: 12px 14px;\n      margin-bottom: 12px;\n      border: 1px solid #b7c4d1;\n      border-left-width: 5px;\n      border-radius: 4px;\n      background-color: #eef3f8;\n      color: #1f2d3d;\n      font-size: 15px;\n      font-weight: 600;\n      line-height: 1.4;\n    }\n    .preview-status-box.status-success {\n      background-color: #edf7ed;\n      border-color: #3c763d;\n      color: #2f5f2f;\n    }\n    .preview-status-box.status-warning {\n      background-color: #fff8e5;\n      border-color: #b37a00;\n      color: #8a5a00;\n    }\n    .preview-status-box.status-error {\n      background-color: #fdecec;\n      border-color: #a94442;\n      color: #8f2f2d;\n    }\n    .preview-status-box.status-info {\n      background-color: #eef3f8;\n      border-color: #4f6f8f;\n      color: #1f2d3d;\n    }\n  "))),
   fluidRow(
     column(
       width = 4,
@@ -353,7 +354,7 @@ ui <- fluidPage(
       ),
       wellPanel(
         h4("Preview"),
-        textOutput("preview_status"),
+        uiOutput("preview_status"),
         tableOutput("preview_count"),
         tags$p("Showing all matching rows unless the target is configured for missing-measure insertion."),
         tableOutput("preview_table")
@@ -372,6 +373,7 @@ server <- function(input, output, session) {
   rv <- reactiveValues(
     connection_status = "Not connected.",
     preview_status = "No preview has been run.",
+    preview_status_type = "info",
     preview_count = NULL,
     preview_data = NULL,
     preview_sql = NULL,
@@ -400,6 +402,7 @@ server <- function(input, output, session) {
     rv$update_sql <- NULL
     rv$last_preview_count <- NULL
     rv$preview_status <- "No preview has been run."
+    rv$preview_status_type <- "info"
 
     if (is_blank(input$db_path)) {
       rv$connection_status <- "Connection failed: database path is required."
@@ -453,6 +456,7 @@ server <- function(input, output, session) {
     if (!is.null(rv$preview_signature) && !identical(signature, rv$preview_signature)) {
       rv$preview_ready <- FALSE
       rv$preview_status <- "Inputs changed after the last preview. Run preview again before updating."
+      rv$preview_status_type <- "warning"
     }
   })
 
@@ -491,7 +495,12 @@ server <- function(input, output, session) {
   })
 
   output$connection_status <- renderText(rv$connection_status)
-  output$preview_status <- renderText(rv$preview_status)
+  output$preview_status <- renderUI({
+    div(
+      class = paste("preview-status-box", paste0("status-", rv$preview_status_type)),
+      rv$preview_status
+    )
+  })
 
   output$preview_count <- renderTable({
     rv$preview_count
@@ -533,6 +542,7 @@ server <- function(input, output, session) {
   observeEvent(input$preview, {
     if (is.null(channel)) {
       rv$preview_status <- "Connect to the database before previewing."
+      rv$preview_status_type <- "warning"
       return()
     }
 
@@ -541,6 +551,7 @@ server <- function(input, output, session) {
 
     if (!is.null(validation_error)) {
       rv$preview_status <- validation_error
+      rv$preview_status_type <- "error"
       return()
     }
 
@@ -554,6 +565,7 @@ server <- function(input, output, session) {
     if (!count_result$ok) {
       rv$preview_status <- paste("Count preview failed:", count_result$message)
       rv$preview_ready <- FALSE
+      rv$preview_status_type <- "error"
       return()
     }
 
@@ -568,6 +580,7 @@ server <- function(input, output, session) {
       if (!preview_result$ok) {
         rv$preview_status <- paste("Row preview failed:", preview_result$message)
         rv$preview_ready <- FALSE
+        rv$preview_status_type <- "error"
         return()
       }
 
@@ -582,11 +595,13 @@ server <- function(input, output, session) {
     } else {
       paste("Preview ready.", affected_rows, "row(s) match the update criteria.")
     }
+    rv$preview_status_type <- "success"
   })
 
   observeEvent(input$confirm_update, {
     if (!isTRUE(rv$preview_ready)) {
       rv$preview_status <- "Run a successful preview before updating."
+      rv$preview_status_type <- "warning"
       return()
     }
 
@@ -620,6 +635,7 @@ server <- function(input, output, session) {
     if (is.null(channel)) {
       rv$preview_status <- "Connection is no longer available. Reconnect and preview again."
       rv$preview_ready <- FALSE
+      rv$preview_status_type <- "error"
       return()
     }
 
@@ -627,6 +643,7 @@ server <- function(input, output, session) {
     if (!identical(config_signature(config), rv$preview_signature)) {
       rv$preview_status <- "Inputs changed after the preview. Run preview again before updating."
       rv$preview_ready <- FALSE
+      rv$preview_status_type <- "warning"
       return()
     }
 
@@ -646,6 +663,7 @@ server <- function(input, output, session) {
         "row(s). Run preview again to inspect the new state."
       )
     }
+    rv$preview_status_type <- "success"
   })
 }
 
