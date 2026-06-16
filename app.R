@@ -153,10 +153,6 @@ run_sql <- function(channel, sql) {
   list(ok = TRUE, message = NULL, data = result)
 }
 
-is_open_rodbc_channel <- function(channel) {
-  inherits(channel, "RODBC") && isTRUE(tryCatch(odbcValidChannel(channel), error = function(err) FALSE))
-}
-
 collect_config <- function(input) {
   criteria_count <- input$criteria_count
 
@@ -360,17 +356,6 @@ server <- function(input, output, session) {
 
     if (inherits(db_channel, "error")) {
       rv$connection_status <- paste("Connection failed:", conditionMessage(db_channel))
-      return()
-    }
-
-    if (!is_open_rodbc_channel(db_channel)) {
-      status_message <- "Connection failed: RODBC did not return an open channel."
-
-      if (length(connection_warnings) > 0) {
-        status_message <- paste(status_message, paste(connection_warnings, collapse = " | "))
-      }
-
-      rv$connection_status <- status_message
       return()
     }
 
