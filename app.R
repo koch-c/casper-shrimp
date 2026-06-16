@@ -153,6 +153,10 @@ run_sql <- function(channel, sql) {
   list(ok = TRUE, message = NULL, data = result)
 }
 
+is_open_rodbc_channel <- function(channel) {
+  inherits(channel, "RODBC") && isTRUE(tryCatch(odbcValidChannel(channel), error = function(err) FALSE))
+}
+
 collect_config <- function(input) {
   criteria_count <- input$criteria_count
 
@@ -341,8 +345,15 @@ server <- function(input, output, session) {
       return()
     }
 
+    connection_warnings <- character(0)
     channel <- tryCatch(
-      odbcConnectAccess2007(input$db_path),
+      withCallingHandlers(
+        odbcConnectAccess2007(input$db_path),
+        warning = function(warn) {
+          connection_warnings <<- c(connection_warnings, conditionMessage(warn))
+          invokeRestart("muffleWarning")
+        }
+      ),
       error = function(err) err
     )
 
@@ -351,8 +362,34 @@ server <- function(input, output, session) {
       return()
     }
 
+    if (!is_open_rodbc_channel(channel)) {
+      rv$channel <- NULL
+      status_message <- "Connection failed: RODBC did not return an open channel."
+
+      if (length(connection_warnings) > 0) {
+        status_message <- paste(status_message, paste(connection_warnings, collapse = " | "))
+      }
+
+      rv$connection_status <- status_message
+      return()
+    }
+
     rv$channel <- channel
-    rv$connection_status <- paste("Connected to", input$db_path)
+
+    validation_result <- run_sql(rv$channel, "SELECT Count(*) AS [StationCount] FROM [tblStation]")
+    if (!validation_result$ok) {
+      close_channel()
+      rv$connection_status <- paste("Connection failed validation:", validation_result$message)
+      return()
+    }
+
+    rv$connection_status <- paste(
+      c(
+        paste("Connected to", input$db_path),
+        if (length(connection_warnings) > 0) paste("Warnings:", paste(connection_warnings, collapse = " | "))
+      ),
+      collapse = " "
+    )
   })
 
   observe({
