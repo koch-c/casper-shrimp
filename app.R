@@ -631,10 +631,6 @@ server <- function(input, output, session) {
     }
 
     update_result <- run_sql(channel, rv$update_sql)
-    if (!update_result$ok) {
-      rv$preview_status <- paste("Update failed:", update_result$message)
-      return()
-    }
 
     rv$preview_ready <- FALSE
     rv$preview_status <- if (isTRUE(config$absence_only)) {
