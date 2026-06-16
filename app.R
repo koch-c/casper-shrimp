@@ -74,6 +74,15 @@ build_target_conditions <- function(config) {
   )
 }
 
+build_missing_target_conditions <- function(config) {
+  paste0(
+    "((", sql_field("tblIndividual", "KeyIndividual"), ") Not In ",
+    "(SELECT ", sql_name("KeyIndividual"), " FROM ", sql_name("tblIndividualMeasure"), " ",
+    "WHERE ", sql_name("IndividualMeasureType"), "=", escape_access_string(config$target_type),
+    "))"
+  )
+}
+
 build_where_clause <- function(config) {
   conditions <- c(
     build_station_conditions(config),
@@ -83,6 +92,27 @@ build_where_clause <- function(config) {
 
   paste0("WHERE ", paste(conditions, collapse = " AND "))
 }
+
+build_missing_where_clause <- function(config) {
+  conditions <- c(
+    build_station_conditions(config),
+    build_criteria_conditions(config$criteria),
+    build_missing_target_conditions(config)
+  )
+
+  paste0("WHERE ", paste(conditions, collapse = " AND "))
+}
+
+individual_join_sql <- paste(
+  "FROM [tblStation]",
+  "INNER JOIN ([tblStationSubGear] INNER JOIN ([tblLstSpecies] INNER JOIN",
+  "((([tblCatch] INNER JOIN [tblCatchSub1] ON [tblCatch].[KeyCatch] = [tblCatchSub1].[KeyCatch])",
+  "INNER JOIN [tblCatchSub2] ON [tblCatchSub1].[KeyCatchSub1] = [tblCatchSub2].[KeyCatchSub1])",
+  "INNER JOIN [tblIndividual] ON [tblCatchSub2].[KeyCatchSub2] = [tblIndividual].[KeyCatchSub2])",
+  "ON [tblLstSpecies].[Species] = [tblCatchSub2].[Species])",
+  "ON [tblStationSubGear].[KeyStationSubGear] = [tblCatch].[KeyStationSubGear])",
+  "ON [tblStation].[KeyStation] = [tblStationSubGear].[KeyStation]"
+)
 
 select_join_sql <- paste(
   "FROM [tblStation]",
@@ -108,6 +138,16 @@ update_join_sql <- paste(
 )
 
 build_count_sql <- function(config) {
+  if (isTRUE(config$absence_only)) {
+    return(paste(
+      "SELECT Count(*) AS [AffectedRows] FROM",
+      "(SELECT DISTINCT [tblIndividual].[KeyIndividual]",
+      individual_join_sql,
+      build_missing_where_clause(config),
+      ") AS [MatchingIndividuals]"
+    ))
+  }
+
   paste(
     "SELECT Count(*) AS [AffectedRows]",
     select_join_sql,
@@ -116,6 +156,10 @@ build_count_sql <- function(config) {
 }
 
 build_preview_sql <- function(config) {
+  if (isTRUE(config$absence_only)) {
+    return(NULL)
+  }
+
   paste(
     "SELECT [tblStation].[TripYear], [tblStation].[Ship], [tblStation].[Trip],",
     "[tblStation].[Station], [tblIndividual].[KeyIndividual], [tblLstSpecies].[NameLatin],",
@@ -128,6 +172,17 @@ build_preview_sql <- function(config) {
 }
 
 build_update_sql <- function(config) {
+  if (isTRUE(config$absence_only)) {
+    return(paste(
+      "INSERT INTO [tblIndividualMeasure] ([KeyIndividual], [IndividualMeasureType], [Attribute])",
+      "SELECT DISTINCT [tblIndividual].[KeyIndividual],",
+      escape_access_string(config$target_type), ",",
+      escape_access_string(config$new_attribute),
+      individual_join_sql,
+      build_missing_where_clause(config)
+    ))
+  }
+
   paste(
     update_join_sql,
     "SET [tblIndividualMeasure].[Attribute] =",
@@ -176,6 +231,7 @@ collect_config <- function(input) {
     trip = input$trip,
     station = input$station,
     criteria = criteria,
+    absence_only = isTRUE(input$absence_only),
     target_type = input$target_type,
     current_attribute = input$current_attribute,
     new_attribute = input$new_attribute
@@ -217,7 +273,7 @@ validate_config <- function(config) {
     return("Target IndividualMeasureType is required.")
   }
 
-  if (is_blank(config$current_attribute)) {
+  if (!isTRUE(config$absence_only) && is_blank(config$current_attribute)) {
     return("Current target Attribute is required.")
   }
 
@@ -225,7 +281,7 @@ validate_config <- function(config) {
     return("New Attribute is required.")
   }
 
-  if (identical(trimws(config$current_attribute), trimws(config$new_attribute))) {
+  if (!isTRUE(config$absence_only) && identical(trimws(config$current_attribute), trimws(config$new_attribute))) {
     return("New Attribute must differ from the current target Attribute.")
   }
 
@@ -240,8 +296,9 @@ config_signature <- function(config) {
     config$trip,
     as.character(config$station),
     unlist(lapply(config$criteria, function(item) c(item$type, item$attribute)), use.names = FALSE),
+    as.character(config$absence_only),
     config$target_type,
-    config$current_attribute,
+    if (isTRUE(config$absence_only)) "" else config$current_attribute,
     config$new_attribute
   )
 
@@ -278,20 +335,27 @@ ui <- fluidPage(
       ),
       wellPanel(
         h4("Update Target"),
+        checkboxInput("absence_only", "Insert when target measure type is missing", value = FALSE),
         textInput("target_type", "Target IndividualMeasureType", value = "ShrimpSex"),
-        textInput("current_attribute", "Current target Attribute", value = "FP"),
+        conditionalPanel(
+          condition = "!input.absence_only",
+          textInput("current_attribute", "Current target Attribute", value = "FP")
+        ),
         textInput("new_attribute", "New Attribute", value = "M")
-      ),
-      actionButton("preview", "Preview affected rows", class = "btn-primary"),
-      actionButton("confirm_update", "Confirm update", class = "btn-danger")
+      )
     ),
     column(
       width = 8,
+      div(
+        style = "margin-bottom: 15px;",
+        actionButton("preview", "Preview affected rows", class = "btn-primary"),
+        actionButton("confirm_update", "Confirm update", class = "btn-danger")
+      ),
       wellPanel(
         h4("Preview"),
         textOutput("preview_status"),
         tableOutput("preview_count"),
-        tags$p("Showing all matching rows."),
+        tags$p("Showing all matching rows unless the target is configured for missing-measure insertion."),
         tableOutput("preview_table")
       ),
       wellPanel(
@@ -442,17 +506,28 @@ server <- function(input, output, session) {
       return("No SQL generated yet.")
     }
 
-    paste(
+    sql_sections <- c(
       "-- Preview count",
-      rv$preview_sql$count,
-      "",
-      "-- Preview sample",
-      rv$preview_sql$preview,
-      "",
-      "-- Update",
-      rv$update_sql,
-      sep = "\n"
+      rv$preview_sql$count
     )
+
+    if (!is.null(rv$preview_sql$preview)) {
+      sql_sections <- c(
+        sql_sections,
+        "",
+        "-- Preview sample",
+        rv$preview_sql$preview
+      )
+    }
+
+    sql_sections <- c(
+      sql_sections,
+      "",
+      if (isTRUE(input$absence_only)) "-- Insert missing target rows" else "-- Update",
+      rv$update_sql
+    )
+
+    paste(sql_sections, collapse = "\n")
   })
 
   observeEvent(input$preview, {
@@ -482,21 +557,31 @@ server <- function(input, output, session) {
       return()
     }
 
-    preview_result <- run_sql(channel, preview_sql)
-    if (!preview_result$ok) {
-      rv$preview_status <- paste("Row preview failed:", preview_result$message)
-      rv$preview_ready <- FALSE
-      return()
-    }
-
     affected_rows <- if (nrow(count_result$data) > 0) count_result$data$AffectedRows[[1]] else 0
 
     rv$preview_count <- data.frame(AffectedRows = affected_rows, check.names = FALSE)
-    rv$preview_data <- preview_result$data
+
+    if (isTRUE(config$absence_only)) {
+      rv$preview_data <- NULL
+    } else {
+      preview_result <- run_sql(channel, preview_sql)
+      if (!preview_result$ok) {
+        rv$preview_status <- paste("Row preview failed:", preview_result$message)
+        rv$preview_ready <- FALSE
+        return()
+      }
+
+      rv$preview_data <- preview_result$data
+    }
+
     rv$preview_signature <- config_signature(config)
     rv$preview_ready <- TRUE
     rv$last_preview_count <- affected_rows
-    rv$preview_status <- paste("Preview ready.", affected_rows, "row(s) match the update criteria.")
+    rv$preview_status <- if (isTRUE(config$absence_only)) {
+      paste("Preview ready.", affected_rows, "individual(s) are missing the target measure type and will receive a new row.")
+    } else {
+      paste("Preview ready.", affected_rows, "row(s) match the update criteria.")
+    }
   })
 
   observeEvent(input$confirm_update, {
@@ -507,11 +592,19 @@ server <- function(input, output, session) {
 
     showModal(modalDialog(
       title = "Confirm bulk update",
-      paste(
-        "The last preview found", rv$last_preview_count,
-        "row(s) to update from", shQuote(input$current_attribute),
-        "to", shQuote(input$new_attribute), "."
-      ),
+      if (isTRUE(input$absence_only)) {
+        paste(
+          "The last preview found", rv$last_preview_count,
+          "individual(s) missing", shQuote(input$target_type),
+          "and will insert a new row with Attribute", shQuote(input$new_attribute), "."
+        )
+      } else {
+        paste(
+          "The last preview found", rv$last_preview_count,
+          "row(s) to update from", shQuote(input$current_attribute),
+          "to", shQuote(input$new_attribute), "."
+        )
+      },
       "Make sure the preview table and SQL are correct before proceeding.",
       footer = tagList(
         modalButton("Cancel"),
@@ -544,11 +637,19 @@ server <- function(input, output, session) {
     }
 
     rv$preview_ready <- FALSE
-    rv$preview_status <- paste(
-      "Update executed. The preview had identified",
-      rv$last_preview_count,
-      "row(s). Run preview again to inspect the new state."
-    )
+    rv$preview_status <- if (isTRUE(config$absence_only)) {
+      paste(
+        "Insert executed. The preview had identified",
+        rv$last_preview_count,
+        "individual(s) missing the target measure type. Run preview again to inspect the new state."
+      )
+    } else {
+      paste(
+        "Update executed. The preview had identified",
+        rv$last_preview_count,
+        "row(s). Run preview again to inspect the new state."
+      )
+    }
   })
 }
 
