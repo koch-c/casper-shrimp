@@ -470,8 +470,8 @@ server <- function(input, output, session) {
     tagList(lapply(seq_len(criteria_count), function(idx) {
       type_id <- paste0("criterion_type_", idx)
       attribute_id <- paste0("criterion_attribute_", idx)
-      current_type <- input[[type_id]]
-      current_attribute <- input[[attribute_id]]
+      current_type <- isolate(input[[type_id]])
+      current_attribute <- isolate(input[[attribute_id]])
 
       fluidRow(
         column(
