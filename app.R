@@ -6,6 +6,8 @@ library(RODBC)
 species_name <- "Pandalus borealis"
 criterion_type_defaults <- c("ShrimpRoe", "EggHair", "ShrimpSex")
 criterion_attribute_defaults <- c("None", "0", "FP")
+db_path_storage_file <- "last_db_path.txt"
+default_db_path <- "F:\\data\\2026-TA-togt1to3\\togt2\\Mallotus.v.7.d.80_ship_2026_TA_2.accdb"
 
 escape_access_string <- function(value) {
   value <- as.character(value)
@@ -23,6 +25,24 @@ default_value <- function(values, idx) {
   } else {
     ""
   }
+}
+
+load_saved_db_path <- function() {
+  if (!file.exists(db_path_storage_file)) {
+    return(default_db_path)
+  }
+
+  saved_path <- tryCatch(readLines(db_path_storage_file, warn = FALSE, n = 1), error = function(err) "")
+
+  if (length(saved_path) < 1 || is_blank(saved_path[[1]])) {
+    default_db_path
+  } else {
+    saved_path[[1]]
+  }
+}
+
+save_db_path <- function(path) {
+  tryCatch(writeLines(as.character(path), db_path_storage_file, useBytes = TRUE), error = function(err) invisible(NULL))
 }
 
 sql_name <- function(value) {
@@ -281,10 +301,6 @@ validate_config <- function(config) {
     return("New Attribute is required.")
   }
 
-  if (!isTRUE(config$absence_only) && identical(trimws(config$current_attribute), trimws(config$new_attribute))) {
-    return("New Attribute must differ from the current target Attribute.")
-  }
-
   NULL
 }
 
@@ -316,7 +332,7 @@ ui <- fluidPage(
         textInput(
           "db_path",
           "Access database path",
-          value = "F:\\data\\2026-TA-togt1to3\\togt2\\Mallotus.v.7.d.80_ship_2026_TA_2.accdb"
+          value = load_saved_db_path()
         ),
         actionButton("connect_db", "Connect"),
         tags$p(strong("Fixed species:"), species_name),
@@ -442,6 +458,7 @@ server <- function(input, output, session) {
       ),
       collapse = " "
     )
+    save_db_path(input$db_path)
   })
 
   observe({
